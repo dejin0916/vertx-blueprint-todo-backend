@@ -1,8 +1,6 @@
 package io.vertx.blueprint.todolist;
 
 import io.vertx.blueprint.todolist.entity.Todo;
-
-import io.vertx.blueprint.todolist.service.RedisTodoService;
 import io.vertx.blueprint.todolist.verticles.TodoVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Vertx;
@@ -13,8 +11,6 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
-
-import io.vertx.redis.RedisOptions;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -57,22 +53,23 @@ public class TodoApiTest {
     HttpClient client = vertx.createHttpClient();
     Async async = context.async();
     Todo todo = new Todo(164, "Test case...", false, 22, "/164");
-    client.post(PORT, "localhost", "/todos", response -> {
-      context.assertEquals(201, response.statusCode());
+    client.request(HttpMethod.POST, PORT, "localhost", "/todos", res -> {
+      context.assertEquals(201, res.result().response().result().statusCode());
+      res.result().putHeader("content-type", "application/json").end(Json.encodePrettily(todo));
       client.close();
       async.complete();
-    }).putHeader("content-type", "application/json").end(Json.encodePrettily(todo));
+    });
   }
 
   @Test(timeout = 3000L)
   public void testGet(TestContext context) throws Exception {
     HttpClient client = vertx.createHttpClient();
     Async async = context.async();
-    client.getNow(PORT, "localhost", "/todos/164", response -> response.bodyHandler(body -> {
-      context.assertEquals(new Todo(body.toString()), todoEx);
+    client.request(HttpMethod.GET, PORT, "localhost", "/todos/164", res -> {
+      context.assertEquals(new Todo(res.result().response().result().body().toString()), todoEx);
       client.close();
       async.complete();
-    }));
+    });
   }
 
   @Test(timeout = 3000L)
@@ -80,13 +77,14 @@ public class TodoApiTest {
     HttpClient client = vertx.createHttpClient();
     Async async = context.async();
     Todo todo = new Todo(164, "Test case...Update!", false, 26, "/164h");
-    client.request(HttpMethod.PATCH, PORT, "localhost", "/todos/164", response -> response.bodyHandler(body -> {
-      context.assertEquals(new Todo(body.toString()), todoUp);
+    client.request(HttpMethod.PATCH, PORT, "localhost", "/todos/164", res -> {
+      context.assertEquals(new Todo(res.result().response().result().body().toString()), todoUp);
       client.request(HttpMethod.DELETE, PORT, "localhost", "/todos/164", rsp -> {
-        context.assertEquals(204, rsp.statusCode());
+        context.assertEquals(204, rsp.result().response().result().statusCode());
+        res.result().putHeader("content-type", "application/json").end(Json.encodePrettily(todo));
         async.complete();
-      }).end();
-    })).putHeader("content-type", "application/json").end(Json.encodePrettily(todo));
+      });
+    });
   }
 
 }

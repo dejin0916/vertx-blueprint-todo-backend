@@ -3,23 +3,26 @@ package io.vertx.blueprint.todolist.verticles;
 
 import io.vertx.blueprint.todolist.Constants;
 import io.vertx.blueprint.todolist.entity.Todo;
-
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.Json;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.CorsHandler;
-import io.vertx.redis.RedisClient;
-import io.vertx.redis.RedisOptions;
+import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisAPI;
+import io.vertx.redis.client.RedisOptions;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -38,7 +41,7 @@ public class SingleApplicationVerticle extends AbstractVerticle {
   private static final int HTTP_PORT = 8082;
   private static final int REDIS_PORT = 6379;
 
-  private RedisClient redis;
+  private RedisAPI redisAPI;
 
   /**
    * Init persistence
@@ -48,30 +51,33 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     // this is for OpenShift Redis Cartridge
     String osPort = System.getenv("OPENSHIFT_REDIS_PORT");
     String osHost = System.getenv("OPENSHIFT_REDIS_HOST");
+    String connectionString;
     if (osPort != null && osHost != null)
-      config = new RedisOptions()
-        .setHost(osHost).setPort(Integer.parseInt(osPort));
+      connectionString = String.format("redis:%s:%s",osHost,osPort);
     else
+      connectionString = String.format("redis:%s:%s",
+              config().getString("redis.host", REDIS_HOST),
+              config().getString("redis.port", String.valueOf(REDIS_PORT)));
+
       config = new RedisOptions()
-        .setHost(config().getString("redis.host", REDIS_HOST))
-        .setPort(config().getInteger("redis.port", REDIS_PORT));
+        .setConnectionString(connectionString);
 
-    this.redis = RedisClient.create(vertx, config);
-
-    redis.hset(Constants.REDIS_TODO_KEY, "24", Json.encodePrettily(
-      new Todo(24, "Something to do...", false, 1, "todo/ex")), res -> {
-      if (res.failed()) {
-        LOGGER.error("Redis service is not running!");
-        res.cause().printStackTrace();
-      }
+    Redis redis = Redis.createClient(vertx, config);
+    this.redisAPI = RedisAPI.api(redis);
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    params.add("24");
+    params.add(Json.encodePrettily(new Todo(24, "Something to do...", false, 1, "todo/ex")));
+    redisAPI.hset(params).onFailure(res -> {
+      LOGGER.error("Redis service is not running!");
+      res.printStackTrace();
     });
 
   }
 
   @Override
-  public void start(Future<Void> future) throws Exception {
+  public void start(Promise<Void> promise) throws Exception {
     initData();
-
     Router router = Router.router(vertx);
     // CORS support
     Set<String> allowHeaders = new HashSet<>();
@@ -100,13 +106,13 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     router.delete(Constants.API_DELETE_ALL).handler(this::handleDeleteAll);
 
     vertx.createHttpServer()
-      .requestHandler(router::accept)
+      .requestHandler(router)
       .listen(config().getInteger("http.port", HTTP_PORT),
         config().getString("http.address", HTTP_HOST), result -> {
           if (result.succeeded())
-            future.complete();
+            promise.complete();
           else
-            future.fail(result.cause());
+            promise.fail(result.cause());
         });
   }
 
@@ -114,16 +120,14 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     try {
       final Todo todo = wrapObject(new Todo(context.getBodyAsString()), context);
       final String encoded = Json.encodePrettily(todo);
-      redis.hset(Constants.REDIS_TODO_KEY, String.valueOf(todo.getId()),
-        encoded, res -> {
-          if (res.succeeded())
-            context.response()
-              .setStatusCode(201)
-              .putHeader("content-type", "application/json")
-              .end(encoded);
-          else
-            sendError(503, context.response());
-        });
+      List<String> params = new ArrayList<>();
+      params.add(Constants.REDIS_TODO_KEY);
+      params.add(String.valueOf(todo.getId()));
+      params.add(encoded);
+      redisAPI.hset(params).onSuccess(res -> context.response()
+        .setStatusCode(201)
+        .putHeader("content-type", "application/json")
+        .end(encoded)).onFailure(res -> sendError(503, context.response()));
     } catch (DecodeException e) {
       sendError(400, context.response());
     }
@@ -134,9 +138,10 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     if (todoID == null)
       sendError(400, context.response());
     else {
-      redis.hget(Constants.REDIS_TODO_KEY, todoID, x -> {
-        if (x.succeeded()) {
-          String result = x.result();
+      redisAPI.hget(Constants.REDIS_TODO_KEY, todoID)
+        .onFailure(res -> sendError(503, context.response()))
+        .onSuccess(res -> {
+          String result = res.toString();
           if (result == null)
             sendError(404, context.response());
           else {
@@ -144,24 +149,21 @@ public class SingleApplicationVerticle extends AbstractVerticle {
               .putHeader("content-type", "application/json")
               .end(result);
           }
-        } else
-          sendError(503, context.response());
       });
     }
   }
 
   private void handleGetAll(RoutingContext context) {
-    redis.hvals(Constants.REDIS_TODO_KEY, res -> {
-      if (res.succeeded()) {
-        String encoded = Json.encodePrettily(res.result().stream()
-          .map(x -> new Todo((String) x))
+    redisAPI.hvals(Constants.REDIS_TODO_KEY)
+      .onFailure(res -> sendError(503, context.response()))
+      .onSuccess(res -> {
+        String encoded = Json.encodePrettily(res.stream()
+          .map(x -> new Todo(x.toString()))
           .collect(Collectors.toList()));
         context.response()
           .putHeader("content-type", "application/json")
           .end(encoded);
-      } else
-        sendError(503, context.response());
-    });
+      });
   }
 
   private void handleUpdateTodo(RoutingContext context) {
@@ -174,25 +176,27 @@ public class SingleApplicationVerticle extends AbstractVerticle {
         return;
       }
 
-      redis.hget(Constants.REDIS_TODO_KEY, todoID, x -> {
-        if (x.succeeded()) {
-          String result = x.result();
-          if (result == null)
-            sendError(404, context.response());
-          else {
-            Todo oldTodo = new Todo(result);
-            String response = Json.encodePrettily(oldTodo.merge(newTodo));
-            redis.hset(Constants.REDIS_TODO_KEY, todoID, response, res -> {
-              if (res.succeeded()) {
-                context.response()
+
+      redisAPI.hget(Constants.REDIS_TODO_KEY, todoID)
+          .onFailure(res -> sendError(503, context.response()))
+          .onSuccess(res -> {
+            String result = res.toString();
+            if (result == null)
+              sendError(404, context.response());
+            else {
+              Todo oldTodo = new Todo(result);
+              String response = Json.encodePrettily(oldTodo.merge(newTodo));
+              List<String> params = new ArrayList<>();
+              params.add(Constants.REDIS_TODO_KEY);
+              params.add(todoID);
+              params.add(response);
+              redisAPI.hset(params)
+                .onSuccess(x -> context.response()
                   .putHeader("content-type", "application/json; charset=utf-8")
-                  .end(response);
-              }
-            });
-          }
-        } else
-          sendError(503, context.response());
-      });
+                  .end(response)
+                );
+            }
+          });
     } catch (DecodeException e) {
       sendError(400, context.response());
     }
@@ -200,21 +204,20 @@ public class SingleApplicationVerticle extends AbstractVerticle {
 
   private void handleDeleteOne(RoutingContext context) {
     String todoID = context.request().getParam("todoId");
-    redis.hdel(Constants.REDIS_TODO_KEY, todoID, res -> {
-      if (res.succeeded())
-        context.response().setStatusCode(204).end();
-      else
-        sendError(503, context.response());
-    });
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    params.add(todoID);
+    redisAPI.hdel(params)
+      .onSuccess(res -> context.response().setStatusCode(204).end())
+      .onFailure(res -> sendError(503, context.response()));
   }
 
   private void handleDeleteAll(RoutingContext context) {
-    redis.del(Constants.REDIS_TODO_KEY, res -> {
-      if (res.succeeded())
-        context.response().setStatusCode(204).end();
-      else
-        sendError(503, context.response());
-    });
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    redisAPI.del(params)
+      .onSuccess(res -> context.response().setStatusCode(204).end())
+      .onFailure(res -> sendError(503, context.response()));
   }
 
   private void sendError(int statusCode, HttpServerResponse response) {

@@ -2,13 +2,15 @@ package io.vertx.blueprint.todolist.service;
 
 import io.vertx.blueprint.todolist.Constants;
 import io.vertx.blueprint.todolist.entity.Todo;
-
 import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.Json;
-import io.vertx.redis.RedisClient;
-import io.vertx.redis.RedisOptions;
+import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisAPI;
+import io.vertx.redis.client.RedisOptions;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -21,18 +23,15 @@ import java.util.stream.Collectors;
  */
 public class RedisTodoService implements TodoService {
 
-  private final Vertx vertx;
-  private final RedisOptions config;
-  private final RedisClient redis;
+  private final RedisAPI redisAPI;
 
   public RedisTodoService(RedisOptions config) {
     this(Vertx.vertx(), config);
   }
 
   public RedisTodoService(Vertx vertx, RedisOptions config) {
-    this.vertx = vertx;
-    this.config = config;
-    this.redis = RedisClient.create(vertx, config);
+    Redis redis = Redis.createClient(vertx, config);
+    this.redisAPI = RedisAPI.api(redis);
   }
 
   @Override
@@ -43,44 +42,38 @@ public class RedisTodoService implements TodoService {
 
   @Override
   public Future<Boolean> insert(Todo todo) {
-    Future<Boolean> result = Future.future();
+    Promise<Boolean> result = Promise.promise();
     final String encoded = Json.encodePrettily(todo);
-    redis.hset(Constants.REDIS_TODO_KEY, String.valueOf(todo.getId()),
-      encoded, res -> {
-        if (res.succeeded())
-          result.complete(true);
-        else
-          result.fail(res.cause());
-      });
-    return result;
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    params.add(String.valueOf(todo.getId()));
+    params.add(encoded);
+    redisAPI.hset(params)
+      .onSuccess(res -> result.complete(true))
+      .onFailure(res -> result.fail(res.getCause()));
+    return result.future();
   }
 
   @Override
   public Future<List<Todo>> getAll() {
-    Future<List<Todo>> result = Future.future();
-    redis.hvals(Constants.REDIS_TODO_KEY, res -> {
-      if (res.succeeded()) {
-        result.complete(res.result()
-          .stream()
-          .map(x -> new Todo((String) x))
-          .collect(Collectors.toList()));
-      } else
-        result.fail(res.cause());
-    });
-    return result;
+    Promise<List<Todo>> result = Promise.promise();
+    redisAPI.hvals(Constants.REDIS_TODO_KEY)
+      .onSuccess(res -> result.complete(
+        res.stream().map(x -> new Todo(x.toString()))
+        .collect(Collectors.toList())
+      ))
+      .onFailure(res -> result.fail(res.getCause()));
+    return result.future();
   }
 
   @Override
   public Future<Optional<Todo>> getCertain(String todoID) {
-    Future<Optional<Todo>> result = Future.future();
-    redis.hget(Constants.REDIS_TODO_KEY, todoID, res -> {
-      if (res.succeeded()) {
-        result.complete(Optional.ofNullable(
-          res.result() == null ? null : new Todo(res.result())));
-      } else
-        result.fail(res.cause());
-    });
-    return result;
+    Promise<Optional<Todo>> result = Promise.promise();
+    redisAPI.hget(Constants.REDIS_TODO_KEY, todoID)
+      .onSuccess(res -> result.complete(Optional.ofNullable(
+        res == null ? null : new Todo(res.toString()))))
+    .onFailure(res -> result.fail(res.getCause()));
+    return result.future();
   }
 
   @Override
@@ -98,25 +91,24 @@ public class RedisTodoService implements TodoService {
 
   @Override
   public Future<Boolean> delete(String todoId) {
-    Future<Boolean> result = Future.future();
-    redis.hdel(Constants.REDIS_TODO_KEY, todoId, res -> {
-      if (res.succeeded())
-        result.complete(true);
-      else
-        result.complete(false);
-    });
-    return result;
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    params.add(todoId);
+    return deleteProcess(params);
   }
 
   @Override
   public Future<Boolean> deleteAll() {
-    Future<Boolean> result = Future.future();
-    redis.del(Constants.REDIS_TODO_KEY, res -> {
-      if (res.succeeded())
-        result.complete(true);
-      else
-        result.complete(false);
-    });
-    return result;
+    List<String> params = new ArrayList<>();
+    params.add(Constants.REDIS_TODO_KEY);
+    return deleteProcess(params);
+  }
+
+  private Future<Boolean> deleteProcess(List<String> params) {
+    Promise<Boolean> result = Promise.promise();
+    redisAPI.del(params)
+      .onSuccess(res -> result.complete(true))
+      .onFailure(res -> result.complete(false));
+    return result.future();
   }
 }

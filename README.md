@@ -56,3 +56,6 @@ Test result of the RESTful API (using [todo-backend-js-spec](https://github.com/
 You can also run it with [the todo backend frontend client](http://www.todobackend.com/client/index.html):
 
 ![Todo Frontend](docs/img/vertx-todobackend-ui.png)
+
+## 其他说明
+增改查改为了使用vertx官方新提供的SQL Client Templates

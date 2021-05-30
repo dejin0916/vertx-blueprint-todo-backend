@@ -5,25 +5,21 @@ import io.vertx.blueprint.todolist.entity.Todo;
 import io.vertx.blueprint.todolist.service.JdbcTodoService;
 import io.vertx.blueprint.todolist.service.RedisTodoService;
 import io.vertx.blueprint.todolist.service.TodoService;
-
-import io.vertx.core.AbstractVerticle;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
+import io.vertx.core.*;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.Json;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.CorsHandler;
-import io.vertx.redis.RedisOptions;
+import io.vertx.redis.client.RedisOptions;
 
 import java.util.HashSet;
-import java.util.Random;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -51,22 +47,23 @@ public class TodoVerticle extends AbstractVerticle {
         break;
       case "redis":
       default:
-        RedisOptions config = new RedisOptions()
-          .setHost(config().getString("redis.host", "127.0.0.1"))
-          .setPort(config().getInteger("redis.port", 6379));
+        String connectionString = String.format("redis:%s:%s",
+          config().getString("redis.host", "127.0.0.1"),
+          config().getString("redis.port", "6379"));
+        String password = config().getString("password");
+        RedisOptions config = new RedisOptions().addConnectionString(connectionString)
+                .setPassword(password);
         service = new RedisTodoService(vertx, config);
     }
 
-    service.initData().setHandler(res -> {
-        if (res.failed()) {
-          LOGGER.error("Persistence service is not running!");
-          res.cause().printStackTrace();
-        }
-      });
+    service.initData().onFailure(res -> {
+        LOGGER.error("Persistence service is not running!");
+        res.printStackTrace();
+    });
   }
 
   @Override
-  public void start(Future<Void> future) throws Exception {
+  public void start(Promise<Void> promise) throws Exception {
     initData();
 
     Router router = Router.router(vertx);
@@ -97,13 +94,13 @@ public class TodoVerticle extends AbstractVerticle {
     router.delete(Constants.API_DELETE_ALL).handler(this::handleDeleteAll);
 
     vertx.createHttpServer()
-      .requestHandler(router::accept)
+      .requestHandler(router)
       .listen(config().getInteger("http.port", PORT),
         config().getString("http.address", HOST), result -> {
           if (result.succeeded())
-            future.complete();
+            promise.complete();
           else
-            future.fail(result.cause());
+            promise.fail(result.cause());
         });
   }
 
@@ -125,7 +122,7 @@ public class TodoVerticle extends AbstractVerticle {
       final Todo todo = wrapObject(new Todo(context.getBodyAsString()), context);
       final String encoded = Json.encodePrettily(todo);
 
-      service.insert(todo).setHandler(resultHandler(context, res -> {
+      service.insert(todo).onComplete(resultHandler(context, res -> {
         if (res) {
           context.response()
             .setStatusCode(201)
@@ -147,8 +144,8 @@ public class TodoVerticle extends AbstractVerticle {
       return;
     }
 
-    service.getCertain(todoID).setHandler(resultHandler(context, res -> {
-      if (!res.isPresent())
+    service.getCertain(todoID).onComplete(resultHandler(context, res -> {
+      if (res.isEmpty())
         notFound(context);
       else {
         final String encoded = Json.encodePrettily(res.get());
@@ -160,7 +157,7 @@ public class TodoVerticle extends AbstractVerticle {
   }
 
   private void handleGetAll(RoutingContext context) {
-    service.getAll().setHandler(resultHandler(context, res -> {
+    service.getAll().onComplete(resultHandler(context, res -> {
       if (res == null) {
         serviceUnavailable(context);
       } else {
@@ -182,7 +179,7 @@ public class TodoVerticle extends AbstractVerticle {
         return;
       }
       service.update(todoID, newTodo)
-        .setHandler(resultHandler(context, res -> {
+        .onComplete(resultHandler(context, res -> {
           if (res == null)
             notFound(context);
           else {
@@ -214,12 +211,12 @@ public class TodoVerticle extends AbstractVerticle {
   private void handleDeleteOne(RoutingContext context) {
     String todoID = context.request().getParam("todoId");
     service.delete(todoID)
-      .setHandler(deleteResultHandler(context));
+      .onComplete(deleteResultHandler(context));
   }
 
   private void handleDeleteAll(RoutingContext context) {
     service.deleteAll()
-      .setHandler(deleteResultHandler(context));
+      .onComplete(deleteResultHandler(context));
   }
 
   private void sendError(int statusCode, HttpServerResponse response) {

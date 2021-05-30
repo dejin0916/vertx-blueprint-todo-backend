@@ -2,6 +2,8 @@ package io.vertx.blueprint.todolist.entity;
 
 import io.vertx.codegen.annotations.DataObject;
 import io.vertx.core.json.JsonObject;
+import io.vertx.sqlclient.templates.annotations.ParametersMapped;
+import io.vertx.sqlclient.templates.annotations.RowMapped;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -9,6 +11,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Todo Entity
  */
 @DataObject(generateConverter = true)
+@RowMapped
+@ParametersMapped
 public class Todo {
 
   private static final AtomicInteger acc = new AtomicInteger(0);
@@ -147,6 +151,6 @@ public class Todo {
       getOrElse(todo.title, title),
       getOrElse(todo.completed, completed),
       getOrElse(todo.order, order),
-      url);
+      getOrElse(todo.getUrl(), url));
   }
 }
