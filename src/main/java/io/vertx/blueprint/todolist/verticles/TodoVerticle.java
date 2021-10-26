@@ -12,7 +12,6 @@ import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.Json;
-import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
@@ -133,19 +132,19 @@ public class TodoVerticle extends AbstractVerticle {
         }
       }));
     } catch (DecodeException e) {
-      sendError(400, context.response());
+      sendError(context.response());
     }
   }
 
   private void handleGetTodo(RoutingContext context) {
     String todoID = context.request().getParam("todoId");
     if (todoID == null) {
-      sendError(400, context.response());
+      sendError(context.response());
       return;
     }
 
     service.getCertain(todoID).onComplete(resultHandler(context, res -> {
-      if (res.isEmpty())
+      if (res.isPresent())
         notFound(context);
       else {
         final String encoded = Json.encodePrettily(res.get());
@@ -175,7 +174,7 @@ public class TodoVerticle extends AbstractVerticle {
       final Todo newTodo = new Todo(context.getBodyAsString());
       // handle error
       if (todoID == null) {
-        sendError(400, context.response());
+        sendError(context.response());
         return;
       }
       service.update(todoID, newTodo)
@@ -219,8 +218,8 @@ public class TodoVerticle extends AbstractVerticle {
       .onComplete(deleteResultHandler(context));
   }
 
-  private void sendError(int statusCode, HttpServerResponse response) {
-    response.setStatusCode(statusCode).end();
+  private void sendError(HttpServerResponse response) {
+    response.setStatusCode(400).end();
   }
 
   private void notFound(RoutingContext context) {

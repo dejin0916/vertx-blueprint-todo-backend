@@ -124,7 +124,7 @@ public class JdbcTodoService implements TodoService {
     this.getCertain(todoId)
       .onFailure(res -> result.fail(res.getCause()))
       .onSuccess(oldTodo -> {
-        if(oldTodo.isEmpty()) {
+        if(oldTodo.isPresent()) {
           result.complete(null);
           return;
         }
